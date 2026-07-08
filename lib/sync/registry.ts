@@ -67,6 +67,7 @@ const upsertServerStmt = db.prepare(`
     ip = excluded.ip,
     token_ref = excluded.token_ref,
     location = excluded.location,
+    enabled = 1,
     updated_at = CURRENT_TIMESTAMP
 `)
 
@@ -86,6 +87,25 @@ export function syncServersFromConfig(config: AppConfig): void {
   })
 
   transaction(servers)
+}
+
+const disableServerStmt = db.prepare(`
+  UPDATE servers SET enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE server_uuid = ?
+`)
+
+// Disables (never deletes - server identity stays immortal per the RFC) any previously-registered
+// server no longer present in config.json, so a removed server stops being targeted by the
+// planner/worker/validator instead of silently lingering as an enabled ghost forever. Matched by
+// name, the one stable key config.json guarantees before a server_uuid is assigned.
+export function disableServersNotInConfig(config: AppConfig): number {
+  const configNames = new Set(config.servers.map((s) => s.name))
+  const staleServers = listServers().filter((s) => s.enabled && !configNames.has(s.name))
+
+  for (const server of staleServers) {
+    disableServerStmt.run(server.server_uuid)
+  }
+
+  return staleServers.length
 }
 
 const upsertCanonicalWatchlistStmt = db.prepare(`
@@ -115,6 +135,12 @@ export interface RegistryBootstrapResult {
 export function bootstrapRegistry(): RegistryBootstrapResult {
   const config = ensureServerUuids()
   syncServersFromConfig(config)
+
+  const disabledCount = disableServersNotInConfig(config)
+  if (disabledCount > 0) {
+    console.log(`🧹 Registry: disabled ${disabledCount} server(s) no longer present in config.json`)
+  }
+
   syncCanonicalWatchlistsFromConfig(config)
 
   return {
