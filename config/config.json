@@ -45,6 +45,17 @@
   "expectedWatchlists": [],
   "sync": {
     "stampMetadata": false,
-    "replicaDeletePolicy": "recreate"
+    "replicaDeletePolicy": "recreate",
+    "scheduler": {
+      "enabled": true,
+      "bootstrapOnStart": true,
+      "workerIntervalMs": 15000,
+      "reconcileIntervalMs": 300000,
+      "validationIntervalMs": 600000,
+      "downloadIntervalMs": 0,
+      "selfBaseUrl": "http://127.0.0.1:3000",
+      "batchSize": 20,
+      "maxBatchesPerTick": 100
+    }
   }
 }

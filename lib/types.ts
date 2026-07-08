@@ -30,6 +30,19 @@ export interface AppConfig {
     // the origin still considers it active. 'recreate' (default) re-pushes it to enforce desired
     // state; 'tombstone' accepts the removal. Defaults to 'recreate' if omitted.
     replicaDeletePolicy?: 'recreate' | 'tombstone';
+    // RFC Phase 2/10 in-process Scheduler (lib/sync/scheduler.ts). All fields optional; the
+    // scheduler falls back to built-in defaults for anything omitted.
+    scheduler?: {
+      enabled?: boolean;
+      bootstrapOnStart?: boolean;
+      workerIntervalMs?: number;
+      reconcileIntervalMs?: number;
+      validationIntervalMs?: number;
+      downloadIntervalMs?: number; // 0 disables the self-triggered download loop
+      selfBaseUrl?: string;
+      batchSize?: number;
+      maxBatchesPerTick?: number;
+    };
   };
 }
 
