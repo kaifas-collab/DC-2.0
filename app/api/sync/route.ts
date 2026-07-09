@@ -25,12 +25,12 @@ function sanitizeFilename(name: string): string {
 }
 
 // FRS needs a few seconds after a photo upload to run face-detection and populate the face
-// object's `thumbnail` field. A card added through the dashboard (AddCardDialog) triggers an
-// immediate re-sync right after the upload, which can race that processing: the face record
-// exists but has no thumbnail yet, so it would otherwise get cached as a permanent placeholder
-// (nothing re-triggers a re-check since the file "already downloaded" logic only guards against
-// re-downloading, not against never having tried). Only worth the retry cost for genuinely recent
-// cards - an old card with no thumbnail almost certainly just never had a photo uploaded.
+// object's `thumbnail` field. When a card is freshly created on an FRS server and the DC's download
+// runs shortly after, it can race that processing: the face record exists but has no thumbnail yet,
+// so it would otherwise get cached as a permanent placeholder (nothing re-triggers a re-check since
+// the file "already downloaded" logic only guards against re-downloading, not against never having
+// tried). Only worth the retry cost for genuinely recent cards - an old card with no thumbnail
+// almost certainly just never had a photo uploaded.
 const RECENT_CARD_WINDOW_MS = 2 * 60 * 1000
 const THUMBNAIL_RETRY_DELAY_MS = 2000
 

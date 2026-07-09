@@ -8,20 +8,17 @@ import { Card } from "@/components/ui/card"
 import SearchBar from "./SearchBar"
 import ThemeToggle from "./ThemeToggle"
 import Pagination from "./Pagination"
-import AddCardDialog from "./AddCardDialog"
-import { 
-  RefreshCw, 
-  Clock, 
-  Server, 
-  Users, 
-  AlertCircle, 
+import {
+  RefreshCw,
+  Clock,
+  Server,
+  Users,
+  AlertCircle,
   CheckCircle,
   Grid3x3,
   Calendar,
-  Eye,
-  Plus
+  Eye
 } from "lucide-react"
-import { Button } from "@/components/ui/button"
 
 export default function DashboardHome() {
   const { config, legacyServers } = useServerConfig()
@@ -30,7 +27,6 @@ export default function DashboardHome() {
   const [serverHealth, setServerHealth] = useState<Record<string, boolean>>({})
   const [healthCheckLoading, setHealthCheckLoading] = useState(true)
   const [currentPage, setCurrentPage] = useState(1)
-  const [isAddCardDialogOpen, setIsAddCardDialogOpen] = useState(false)
   const itemsPerPage = 10
 
   // Ensure animations only run after hydration
@@ -220,14 +216,6 @@ export default function DashboardHome() {
               </p>
             </div>
             <div className="flex items-center gap-4">
-              <Button
-                onClick={() => setIsAddCardDialogOpen(true)}
-                className="gap-2"
-                variant="default"
-              >
-                <Plus className="h-4 w-4" />
-                Add Card
-              </Button>
               <Link href="/dashboard">
                 <button className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-sm font-medium">
                   View All Records
@@ -376,16 +364,6 @@ export default function DashboardHome() {
           </motion.div>
         )}
       </main>
-
-      {/* Add Card Dialog */}
-      <AddCardDialog
-        isOpen={isAddCardDialogOpen}
-        onClose={() => setIsAddCardDialogOpen(false)}
-        onSuccess={() => {
-          // Refresh page or trigger sync after successful add
-          window.location.reload()
-        }}
-      />
     </div>
   )
 }

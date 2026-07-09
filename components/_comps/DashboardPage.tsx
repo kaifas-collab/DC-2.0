@@ -12,21 +12,19 @@ import { Badge } from "@/components/ui/badge"
 import SearchBar from "./SearchBar"
 import ThemeToggle from "./ThemeToggle"
 import Pagination from "./Pagination"
-import AddCardDialog from "./AddCardDialog"
-import { 
-  RefreshCw, 
-  Clock, 
-  Server, 
-  Users, 
-  AlertCircle, 
+import {
+  RefreshCw,
+  Clock,
+  Server,
+  Users,
+  AlertCircle,
   CheckCircle,
   Grid3x3,
   Calendar,
   Eye,
   CheckSquare,
   Trash2,
-  Check,
-  Plus
+  Check
 } from "lucide-react"
 import type { UnifiedCardData, SyncStatus } from "@/lib/types"
 import CardDetailsDrawer from "./CardDetailsDrawer"
@@ -51,7 +49,6 @@ export default function DashboardPage() {
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedCards, setSelectedCards] = useState<Set<string>>(new Set())
   const [isDeleting, setIsDeleting] = useState(false)
-  const [isAddCardDialogOpen, setIsAddCardDialogOpen] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [totalItems, setTotalItems] = useState(0)
   const [syncVersion, setSyncVersion] = useState(0)
@@ -269,17 +266,6 @@ export default function DashboardPage() {
           </div>
           
           <div className="flex items-center gap-4">
-            {/* Add Card Button */}
-            <Button
-              onClick={() => setIsAddCardDialogOpen(true)}
-              variant="default"
-              size="sm"
-              className="gap-2"
-            >
-              <Plus className="w-4 h-4" />
-              Add Card
-            </Button>
-
             {/* Refresh Button */}
             <Button
               onClick={handleManualRefresh}
@@ -676,16 +662,6 @@ export default function DashboardPage() {
           onDelete={handleDeleteCard}
         />
       )}
-
-      {/* Add Card Dialog */}
-      <AddCardDialog
-        isOpen={isAddCardDialogOpen}
-        onClose={() => setIsAddCardDialogOpen(false)}
-        onSuccess={() => {
-          // Trigger a sync to get the newly added card(s)
-          handleManualRefresh()
-        }}
-      />
     </div>
   )
 }
