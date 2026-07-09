@@ -88,7 +88,9 @@ export default function DashboardPage() {
     return () => { clearTimeout(timer); controller.abort() }
   }, [currentPage, searchQuery, syncVersion])
 
-  // Subscribe to sync status — bump syncVersion to trigger re-fetch after sync
+  // Subscribe to sync status — bump syncVersion to trigger re-fetch after a REAL sync completes
+  // (manual Force Refresh click, or the auto-refresh timer per refreshIntervalSeconds). This never
+  // initiates a sync itself, only reacts to one.
   useEffect(() => {
     const unsubscribe = frsDataManager.onSyncStatusChange((status) => {
       setSyncStatus(status)
@@ -101,16 +103,15 @@ export default function DashboardPage() {
     return () => { if (typeof unsubscribe === 'function') unsubscribe() }
   }, [])
 
-  // Trigger initial sync if DB is empty
+  // Keep the "Total Records" stat tile accurate from the real database count (already fetched
+  // above via the cheap /api/cards call) instead of frsDataManager's in-memory totalCards, which
+  // resets to 0 on every page load/reload and previously caused a full FRS force-sync to fire on
+  // every refresh - not just on the Force Refresh button or the scheduled interval as intended.
   useEffect(() => {
-    const s = frsDataManager.getSyncStatus()
-    if (s.totalCards === 0) {
-      frsDataManager.refreshAllData().catch(console.error)
-    } else {
-      setSyncStatus(s)
-      setTotalItems(s.totalCards)
+    if (totalItems > 0) {
+      setSyncStatus((prev) => (prev.totalCards === totalItems ? prev : { ...prev, totalCards: totalItems }))
     }
-  }, [])
+  }, [totalItems])
 
   const handleManualRefresh = async () => {
     try {
