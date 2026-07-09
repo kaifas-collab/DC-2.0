@@ -70,6 +70,23 @@ async function fetchFaceForCard(
   return lastFace
 }
 
+// Picks the image the sync engine will re-upload to mirror servers to recreate the face.
+// Two rules, both learned from mirrored cards arriving with no photo:
+//   1. Prefer the full source_photo over the cropped thumbnail - FRS needs a real photo to detect
+//      a face in; a tiny thumbnail is often rejected on the destination.
+//   2. Only ever return a locally-downloaded /uploads/ path. A remote URL or a placeholder means
+//      "no usable image yet" and must be null - otherwise image_hash gets computed from the
+//      placeholder string and looks like a real image that the worker then never actually uploads
+//      (it can only upload files under /uploads/), permanently masking the card as "has image".
+function pickSyncablePhoto(card: any): string | null {
+  for (const candidate of [card.source_photo, card.thumbnail]) {
+    if (typeof candidate === 'string' && candidate.startsWith('/uploads/')) {
+      return candidate
+    }
+  }
+  return null
+}
+
 // Helper function to download and save image using curl (async, non-blocking)
 async function downloadImage(url: string, cardName: string, cardId: string): Promise<string | null> {
   try {
@@ -364,7 +381,7 @@ export async function POST(request: NextRequest) {
                   active: Boolean(rawCard.active),
                   watchlistLocalIds: Array.isArray(rawCard.watch_lists) ? rawCard.watch_lists : [],
                   modifiedDate,
-                  photoPath: rawCard.thumbnail || null,
+                  photoPath: pickSyncablePhoto(rawCard),
                   comment: rawCard.comment || '',
                   stampedGlobalUuid: CONFIG.sync?.stampMetadata ? rawCard.meta?.dc_global_key || null : null,
                 })

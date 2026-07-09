@@ -403,6 +403,22 @@ async function processPlacement(placement: CardPlacementRow, workerId: string): 
         const uploaded = await uploadPhotoToFRS(entry, config, localCardId, globalCard.image_ref)
         if (uploaded) {
           appliedImageHash = globalCard.image_hash
+          logger.info('sync.worker', `Uploaded photo for card ${localCardId} on ${server.name} (placement ${placement.id})`, {
+            placementId: placement.id,
+            server: server.name,
+            localCardId,
+            imageRef: globalCard.image_ref,
+          })
+        } else {
+          // image_hash is set but the referenced file isn't an on-disk /uploads/ path we can
+          // re-upload (remote URL, missing file, or a placeholder that slipped through) - the
+          // mirror card gets created without a photo. Logged so this is visible, not silent.
+          logger.warn('sync.worker', `No local photo file to upload for placement ${placement.id} (image_ref=${globalCard.image_ref ?? 'null'}) - mirror card ${localCardId} on ${server.name} created without image`, {
+            placementId: placement.id,
+            server: server.name,
+            localCardId,
+            imageRef: globalCard.image_ref,
+          })
         }
       } catch (photoError) {
         logger.warn('sync.worker', `Photo upload failed for placement ${placement.id} (card ${localCardId} on ${server.name}), continuing`, {
@@ -412,6 +428,12 @@ async function processPlacement(placement: CardPlacementRow, workerId: string): 
           error: photoError instanceof Error ? photoError.message : String(photoError),
         })
       }
+    } else if (!globalCard.image_hash) {
+      logger.info('sync.worker', `Origin card for placement ${placement.id} has no image yet - mirror ${localCardId} on ${server.name} created without image (will sync once the origin card has a photo)`, {
+        placementId: placement.id,
+        server: server.name,
+        localCardId,
+      })
     }
 
     markSyncedStmt.run(

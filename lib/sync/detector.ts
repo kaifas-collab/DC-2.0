@@ -28,6 +28,7 @@ import crypto from 'crypto'
 import db from './schema'
 import { listServerWatchlists } from './watchlist'
 import { computeMetadataHash, computeImageHash } from './hash'
+import logger from '../logger'
 import type { ServerRow, CardPlacementRow, GlobalCardRow } from './types'
 
 export interface DownloadedCard {
@@ -55,6 +56,24 @@ export type ClassificationOutcome =
 
 const findPlacementByLocalIdStmt = db.prepare(`
   SELECT * FROM card_placements WHERE server_uuid = ? AND local_card_id = ?
+`)
+
+// Layer 3.5 (mirror-return adoption): find a mirror placement on THIS server that we created (via
+// the planner) to fan a card out here, that the worker has already fulfilled on FRS but whose
+// local_card_id has NOT yet been recorded (still NULL) - the exact state during the race between
+// "FRS assigned the new id" and "worker persisted that id". Matched on metadata_hash only, never
+// image_hash: FRS re-encodes the re-downloaded photo so its bytes (and hash) legitimately differ
+// from the origin's, but name+active+watchlists+comment survive the round-trip unchanged.
+const findUnboundMirrorPlacementStmt = db.prepare(`
+  SELECT cp.* FROM card_placements cp
+  INNER JOIN global_cards gc ON gc.global_card_uuid = cp.global_card_uuid
+  WHERE cp.server_uuid = ?
+    AND cp.is_origin = 0
+    AND cp.local_card_id IS NULL
+    AND gc.status = 'active'
+    AND gc.metadata_hash = ?
+  ORDER BY cp.id
+  LIMIT 1
 `)
 
 const getGlobalCardStmt = db.prepare(`SELECT * FROM global_cards WHERE global_card_uuid = ?`)
@@ -175,7 +194,29 @@ function classifyImpl(server: ServerRow, card: DownloadedCard): ClassificationOu
     }
   }
 
-  // Genuinely new origin card - no known placement, no matching stamp.
+  // Layer 3.5 (mirror-return adoption): this is the copy WE pushed to this server coming back
+  // before Layer 1 could see its recorded local_card_id. Bind it into its waiting placement rather
+  // than misclassifying it as a new origin (which the planner would then fan back to the ORIGINAL
+  // origin server - the A->B->A duplicate). See findUnboundMirrorPlacementStmt above.
+  const returningMirror = findUnboundMirrorPlacementStmt.get(server.server_uuid, metadataHash) as
+    | CardPlacementRow
+    | undefined
+  if (returningMirror) {
+    touchPlacementLocalIdStmt.run(card.originCardId, returningMirror.id)
+    logger.info(
+      'sync.detector',
+      `Adopted returning mirror card ${card.originCardId} on ${server.name} into placement ${returningMirror.id} (metadata match) - prevented a duplicate back to the origin`,
+      {
+        server: server.name,
+        localCardId: card.originCardId,
+        placementId: returningMirror.id,
+        globalCardUuid: returningMirror.global_card_uuid,
+      }
+    )
+    return { kind: 'known_replica_confirmed', globalCardUuid: returningMirror.global_card_uuid }
+  }
+
+  // Genuinely new origin card - no known placement, no matching stamp, no returning mirror.
   const globalCardUuid = crypto.randomUUID()
   insertGlobalCardStmt.run(
     globalCardUuid,
@@ -197,6 +238,16 @@ function classifyImpl(server: ServerRow, card: DownloadedCard): ClassificationOu
     1,
     1,
     buildIdempotencyKey(globalCardUuid, 1, server.server_uuid)
+  )
+
+  logger.info(
+    'sync.detector',
+    `New origin card ${card.originCardId} "${card.name}" on ${server.name} - will mirror to all other servers`,
+    {
+      server: server.name,
+      localCardId: card.originCardId,
+      globalCardUuid,
+    }
   )
 
   return { kind: 'new_origin', globalCardUuid }
