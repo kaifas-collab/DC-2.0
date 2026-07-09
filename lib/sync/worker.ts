@@ -185,17 +185,27 @@ async function createCardOnFRS(
   config: AppConfig,
   name: string,
   comment: string,
-  watchlistIds: number[]
+  watchlistIds: number[],
+  // The DC-assigned global identity to stamp into the card's meta, so a later download recognizes
+  // this exact card as a known replica in O(1) via its stamp (detector.ts Layer 2) instead of
+  // relying on the local_card_id timing window or the metadata-hash adoption fallback. Only sent
+  // when config.sync.stampMetadata is enabled - see the call site. Passing null omits meta entirely
+  // so a stricter FRS that rejects unknown fields is never affected while stamping is off.
+  stampGlobalUuid: string | null
 ): Promise<string> {
   const url: string = `${entry.baseURL}${config.apiEndpoints.cards}`
+  const payload: Record<string, unknown> = {
+    active: true,
+    name,
+    comment,
+    watch_lists: watchlistIds,
+  }
+  if (stampGlobalUuid) {
+    payload.meta = { dc_global_key: stampGlobalUuid }
+  }
   const response = await axios.post<{ id: number | string }>(
     url,
-    {
-      active: true,
-      name,
-      comment,
-      watch_lists: watchlistIds,
-    },
+    payload,
     {
       headers: {
         Accept: 'application/json',
@@ -385,7 +395,8 @@ async function processPlacement(placement: CardPlacementRow, workerId: string): 
         server: server.name,
         globalCardUuid: placement.global_card_uuid,
       })
-      localCardId = await createCardOnFRS(entry, config, globalCard.name || 'Unknown', globalCard.comment || '', watchlistIds)
+      const stampGlobalUuid = config.sync?.stampMetadata ? placement.global_card_uuid : null
+      localCardId = await createCardOnFRS(entry, config, globalCard.name || 'Unknown', globalCard.comment || '', watchlistIds, stampGlobalUuid)
       persistLocalCardIdStmt.run(localCardId, placement.id)
       logger.info('sync.worker', `Created card ${localCardId} on ${server.name} for placement ${placement.id}`, {
         placementId: placement.id,
