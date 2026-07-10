@@ -162,6 +162,17 @@ function classifyImpl(server: ServerRow, card: DownloadedCard): ClassificationOu
         return { kind: 'known_origin_unchanged', globalCardUuid: globalCard.global_card_uuid }
       }
 
+      logger.info(
+        'sync.detector',
+        `Card "${card.name}" updated on origin ${server.name} (local id ${card.originCardId}) - will re-propagate to all replicas`,
+        {
+          server: server.name,
+          localCardId: card.originCardId,
+          globalCardUuid: globalCard.global_card_uuid,
+          newVersion: globalCard.sync_version + 1,
+        }
+      )
+
       return {
         kind: 'known_origin_updated',
         globalCardUuid: globalCard.global_card_uuid,
@@ -172,7 +183,19 @@ function classifyImpl(server: ServerRow, card: DownloadedCard): ClassificationOu
     // Known replica: this is exactly the steady-state loop-prevention case from the RFC (server B
     // re-assigns local ids on its own schedule; we already know this one). Never re-propagate.
     if (placement.local_card_id !== card.originCardId) {
+      const previousLocalCardId = placement.local_card_id
       touchPlacementLocalIdStmt.run(card.originCardId, placement.id)
+      logger.info(
+        'sync.mapping',
+        `Rebound local_card_id for placement ${placement.id} on ${server.name}: ${previousLocalCardId ?? 'null'} -> ${card.originCardId}`,
+        {
+          server: server.name,
+          placementId: placement.id,
+          globalCardUuid: placement.global_card_uuid,
+          previousLocalCardId,
+          newLocalCardId: card.originCardId,
+        }
+      )
     }
     return { kind: 'known_replica_confirmed', globalCardUuid: placement.global_card_uuid }
   }

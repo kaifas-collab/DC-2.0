@@ -1,111 +1,61 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { exec } from 'child_process'
-import { promisify } from 'util'
 import { getServerConfig } from '@/config/serverConfig'
+import { checkServerHealth } from '@/lib/health'
+import type { ServerConfig } from '@/lib/types'
 
-const execAsync = promisify(exec)
+// Resolves a server from config by name, or by the IP embedded in its baseURL (back-compat with the
+// old ping endpoint that took { ip }).
+function resolveServer(CONFIG: ReturnType<typeof getServerConfig>, opts: { serverName?: string | null; ip?: string | null }): ServerConfig | undefined {
+  if (opts.serverName) {
+    return CONFIG.servers.find((s) => s.name === opts.serverName)
+  }
+  if (opts.ip) {
+    return CONFIG.servers.find((s) => {
+      const m = s.baseURL.match(/\/\/([^:/]+)/)
+      return m && m[1] === opts.ip
+    })
+  }
+  return undefined
+}
 
-// GET /api/health-check?server=ServerName - Check health of a specific server
+// GET /api/health-check?server=ServerName - real FRS-API health check for one server.
 export async function GET(request: NextRequest) {
   const CONFIG = getServerConfig()
   try {
-    const { searchParams } = new URL(request.url)
-    const serverName = searchParams.get('server')
-
+    const serverName = new URL(request.url).searchParams.get('server')
     if (!serverName) {
-      return NextResponse.json({ 
-        success: false, 
-        error: 'Server name is required' 
-      }, { status: 400 })
+      return NextResponse.json({ success: false, error: 'Server name is required' }, { status: 400 })
     }
 
-    const server = CONFIG.servers.find(s => s.name === serverName)
+    const server = resolveServer(CONFIG, { serverName })
     if (!server) {
-      return NextResponse.json({ 
-        success: false, 
-        error: 'Server not found' 
-      }, { status: 404 })
+      return NextResponse.json({ success: false, error: 'Server not found' }, { status: 404 })
     }
 
-    // Extract IP from baseURL
-    const ipMatch = server.baseURL.match(/\/\/([^:/]+)/)
-    const ip = ipMatch ? ipMatch[1] : null
-
-    if (!ip) {
-      return NextResponse.json({ 
-        success: false, 
-        error: 'Invalid server URL' 
-      }, { status: 400 })
-    }
-
-    try {
-      await execAsync(`ping -c 1 -W 3 -n ${ip}`)
-      return NextResponse.json({
-        success: true,
-        online: true,
-        serverName,
-        ip
-      })
-    } catch {
-      return NextResponse.json({
-        success: true,
-        online: false,
-        serverName,
-        ip
-      })
-    }
+    const online = await checkServerHealth(server)
+    const ip = server.baseURL.match(/\/\/([^:/]+)/)?.[1] ?? null
+    return NextResponse.json({ success: true, online, serverName, ip })
   } catch (error) {
     console.error('Health check error:', error)
-    return NextResponse.json(
-      { success: false, error: 'Health check failed' },
-      { status: 500 }
-    )
+    return NextResponse.json({ success: false, error: 'Health check failed' }, { status: 500 })
   }
 }
 
-// POST /api/health-check - Legacy endpoint for IP-based health check
+// POST /api/health-check - real FRS-API health check. Accepts { serverName } (preferred) or { ip }.
 export async function POST(request: NextRequest) {
   const CONFIG = getServerConfig()
   try {
-    const { ip } = await request.json()
-    
-    if (!ip) {
-      return NextResponse.json({ 
-        success: false, 
-        error: 'IP address is required' 
-      }, { status: 400 })
+    const body = await request.json()
+    const server = resolveServer(CONFIG, { serverName: body.serverName, ip: body.ip })
+    if (!server) {
+      return NextResponse.json({ success: false, error: 'Server not found' }, { status: 404 })
     }
 
-    // Pure ping command - works on local network without internet
-    // -c 1: send 1 packet
-    // -W 3: wait 3 seconds for response
-    // -n: numeric output only (no DNS resolution needed - no internet dependency)
-    try {
-      const { stdout, stderr } = await execAsync(`ping -c 1 -W 3 -n ${ip}`)
-      
-      console.log(`✅ Ping successful for ${ip}`)
-      
-      // If ping succeeds, server is online
-      return NextResponse.json({
-        success: true,
-        online: true,
-        ip
-      })
-    } catch (pingError) {
-      console.log(`❌ Ping failed for ${ip}`)
-      
-      // If ping fails, server is offline
-      return NextResponse.json({
-        success: true,
-        online: false,
-        ip
-      })
-    }
+    const online = await checkServerHealth(server)
+    const ip = server.baseURL.match(/\/\/([^:/]+)/)?.[1] ?? null
+    return NextResponse.json({ success: true, online, serverName: server.name, ip })
   } catch (error) {
     console.error('Health check error:', error)
-    return NextResponse.json(
-      { success: false, error: 'Health check failed' },
-      { status: 500 }
-    )
+    return NextResponse.json({ success: false, error: 'Health check failed' }, { status: 500 })
   }
 }

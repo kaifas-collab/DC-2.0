@@ -12,6 +12,7 @@ import { classify } from '@/lib/sync/detector'
 import { advanceCursor, markFullScan } from '@/lib/sync/cursors'
 import { planFromClassification } from '@/lib/sync/planner'
 import { detectOriginDeletes, detectReplicaDeletes } from '@/lib/sync/deletion'
+import { isSyncPaused } from '@/lib/sync/pause'
 import logger from '@/lib/logger'
 
 const execAsync = promisify(exec)
@@ -136,8 +137,19 @@ async function downloadImage(url: string, cardName: string, cardId: string): Pro
 export async function POST(request: NextRequest) {
   const CONFIG = getServerConfig()
   try {
+    // A DC cluster-delete is in flight - refuse to download/reconcile until every placement of the
+    // deleted card(s) has finished, so this sync pass can't restore something being intentionally
+    // removed. Force Refresh returns this same 409 to the UI (see components/_comps/DashboardPage.tsx).
+    if (isSyncPaused()) {
+      logger.warn('sync.pause', 'Sync request refused - a cluster delete is in progress')
+      return NextResponse.json(
+        { success: false, paused: true, error: 'Sync is paused while a delete is in progress' },
+        { status: 409 }
+      )
+    }
+
     console.log('🔄 Manual sync triggered...')
-    
+
     const results = await Promise.allSettled(
       CONFIG.servers.map(async (server) => {
         const syncStartedAt = Date.now()

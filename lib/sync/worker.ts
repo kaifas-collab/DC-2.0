@@ -17,6 +17,8 @@ import FormData from 'form-data'
 import db from './schema'
 import { getServerByUuid } from './registry'
 import { resolveWatchlists, getServerConfigEntry } from './watchlist'
+import { isSyncPaused } from './pause'
+import { maybeFinalizeClusterDelete } from './clusterDelete'
 import logger from '../logger'
 import type { AppConfig, ServerConfig } from '../types'
 import type { CardPlacementRow, GlobalCardRow, ServerRow, SyncAuditEventType } from './types'
@@ -68,31 +70,51 @@ const reapExpiredLeasesStmt = db.prepare(`
   WHERE sync_status = 'in_progress' AND lease_expires_at IS NOT NULL AND lease_expires_at < CURRENT_TIMESTAMP
 `)
 
+// Normal claim: any enabled-server placement that's pending/failed and due.
+const claimBatchStmt = db.prepare(`
+  UPDATE card_placements
+  SET sync_status = 'in_progress', lease_owner = ?, lease_expires_at = ?, updated_at = CURRENT_TIMESTAMP
+  WHERE id IN (
+    SELECT cp.id FROM card_placements cp
+    INNER JOIN servers s ON s.server_uuid = cp.server_uuid
+    WHERE cp.sync_status IN ('pending', 'failed')
+      AND cp.next_attempt_at <= CURRENT_TIMESTAMP
+      AND s.enabled = 1
+    ORDER BY cp.next_attempt_at
+    LIMIT ?
+  )
+  RETURNING *
+`)
+
+// Paused claim (a DC cluster-delete is in flight somewhere): same as above but EXCLUDES
+// create/restore jobs (global card still 'active' and this placement has never had a local id) -
+// those must wait so the engine can't recreate a card while it's intentionally being removed.
+// Delete jobs (global card 'deleted') and ordinary updates (local_card_id already set) still flow,
+// since draining deletes is exactly what clears the pause.
+const claimBatchPausedStmt = db.prepare(`
+  UPDATE card_placements
+  SET sync_status = 'in_progress', lease_owner = ?, lease_expires_at = ?, updated_at = CURRENT_TIMESTAMP
+  WHERE id IN (
+    SELECT cp.id FROM card_placements cp
+    INNER JOIN servers s ON s.server_uuid = cp.server_uuid
+    INNER JOIN global_cards gc ON gc.global_card_uuid = cp.global_card_uuid
+    WHERE cp.sync_status IN ('pending', 'failed')
+      AND cp.next_attempt_at <= CURRENT_TIMESTAMP
+      AND s.enabled = 1
+      AND (cp.local_card_id IS NOT NULL OR gc.status = 'deleted')
+    ORDER BY cp.next_attempt_at
+    LIMIT ?
+  )
+  RETURNING *
+`)
+
 function claimBatchImpl(workerId: string, limit: number): CardPlacementRow[] {
   reapExpiredLeasesStmt.run()
 
   const leaseExpiresAt = new Date(Date.now() + LEASE_MS).toISOString()
+  const stmt = isSyncPaused() ? claimBatchPausedStmt : claimBatchStmt
 
-  const rows = db
-    .prepare(
-      `
-      UPDATE card_placements
-      SET sync_status = 'in_progress', lease_owner = ?, lease_expires_at = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id IN (
-        SELECT cp.id FROM card_placements cp
-        INNER JOIN servers s ON s.server_uuid = cp.server_uuid
-        WHERE cp.sync_status IN ('pending', 'failed')
-          AND cp.next_attempt_at <= CURRENT_TIMESTAMP
-          AND s.enabled = 1
-        ORDER BY cp.next_attempt_at
-        LIMIT ?
-      )
-      RETURNING *
-      `
-    )
-    .all(workerId, leaseExpiresAt, limit) as CardPlacementRow[]
-
-  return rows
+  return stmt.all(workerId, leaseExpiresAt, limit) as CardPlacementRow[]
 }
 
 const claimBatchTx = db.transaction(claimBatchImpl)
@@ -317,6 +339,7 @@ async function processDelete(
   if (!placement.local_card_id) {
     // Never had a copy here - nothing to delete remotely.
     markPlacementDeletedStmt.run(placement.id)
+    maybeFinalizeClusterDelete(globalCard.global_card_uuid)
     return 'deleted'
   }
 
@@ -325,6 +348,14 @@ async function processDelete(
     await deleteCardOnFRS(entry, config, placement.local_card_id)
     markPlacementDeletedStmt.run(placement.id)
     logAudit('delete_success', placement, workerId, null)
+    logger.info('sync.delete', `Deleted card ${placement.local_card_id} on ${server.name}`, {
+      globalCardUuid: globalCard.global_card_uuid,
+      syncHash: globalCard.metadata_hash,
+      localCardId: placement.local_card_id,
+      serverName: server.name,
+      success: true,
+    })
+    maybeFinalizeClusterDelete(globalCard.global_card_uuid)
     return 'deleted'
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown delete error'
@@ -333,14 +364,39 @@ async function processDelete(
     if (nextRetryCount >= MAX_ATTEMPTS) {
       markDeadLetterStmt.run(nextRetryCount, message, placement.id)
       logAudit('dead_letter', placement, workerId, message)
-      logger.error('sync.worker', `Placement ${placement.id} delete moved to dead_letter after ${nextRetryCount} attempts: ${message}`, { placementId: placement.id, attempts: nextRetryCount })
+      logger.error('sync.delete', `Delete moved to dead_letter for card ${placement.local_card_id} on ${server.name} after ${nextRetryCount} attempts`, {
+        globalCardUuid: globalCard.global_card_uuid,
+        syncHash: globalCard.metadata_hash,
+        localCardId: placement.local_card_id,
+        serverName: server.name,
+        success: false,
+        reason: message,
+        attempts: nextRetryCount,
+      })
+      // dead_letter is terminal for pause purposes (see isSyncPaused()), but this placement's own
+      // card never reaches maybeFinalizeClusterDelete's "all deleted" check - a dead-lettered
+      // placement keeps the mapping around for operator retry, so that function returns early and
+      // never gets to its "resumed" log. If this dead-letter was the last thing holding the pause
+      // open, log the transition here instead - a placement can only dead-letter once (terminal,
+      // never reclaimed), so this can't double-fire.
+      if (!isSyncPaused()) {
+        logger.info('sync.pause', 'Sync resumed - no cluster deletes remain in progress')
+      }
       return 'deadLettered'
     }
 
     const nextAttemptAt = new Date(Date.now() + computeBackoffMs(nextRetryCount)).toISOString()
     markFailedStmt.run(nextRetryCount, nextAttemptAt, message, placement.id)
     logAudit('delete_failed', placement, workerId, message)
-    logger.warn('sync.worker', `Placement ${placement.id} delete failed (attempt ${nextRetryCount}): ${message}`, { placementId: placement.id, attempt: nextRetryCount })
+    logger.warn('sync.delete', `Delete failed for card ${placement.local_card_id} on ${server.name} (attempt ${nextRetryCount})`, {
+      globalCardUuid: globalCard.global_card_uuid,
+      syncHash: globalCard.metadata_hash,
+      localCardId: placement.local_card_id,
+      serverName: server.name,
+      success: false,
+      reason: message,
+      attempt: nextRetryCount,
+    })
     return 'failed'
   }
 }
@@ -405,6 +461,12 @@ async function processPlacement(placement: CardPlacementRow, workerId: string): 
       })
     } else {
       await updateCardOnFRS(entry, config, localCardId, globalCard.name || 'Unknown', globalCard.comment || '', watchlistIds)
+      logger.info('sync.worker', `Updated card ${localCardId} on ${server.name} for placement ${placement.id} (name/comment/watchlists re-synced)`, {
+        placementId: placement.id,
+        server: server.name,
+        localCardId,
+        globalCardUuid: placement.global_card_uuid,
+      })
     }
 
     // Only re-upload the photo when it actually changed - re-uploading on every metadata-only

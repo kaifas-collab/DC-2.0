@@ -24,6 +24,7 @@ import { reconcileAllPlacements } from './planner'
 import { bootstrapRegistry } from './registry'
 import { validateAllServers } from './configValidator'
 import { getServerConfig } from '@/config/serverConfig'
+import { isSyncPaused } from './pause'
 import logger from '../logger'
 
 export interface SchedulerConfig {
@@ -129,6 +130,11 @@ async function workerDrain(cfg: SchedulerConfig): Promise<void> {
 }
 
 async function reconcileSweep(): Promise<void> {
+  // A cluster delete is in flight - skip this sweep so it can't re-stale/recreate placements while
+  // the delete is resolving. Resumes automatically once isSyncPaused() clears.
+  if (isSyncPaused()) {
+    return
+  }
   const results = reconcileAllPlacements()
   const created = results.reduce((sum, r) => sum + r.createdPlacements, 0)
   const restaled = results.reduce((sum, r) => sum + r.restaledPlacements, 0)
@@ -148,6 +154,10 @@ async function validationSweep(): Promise<void> {
 }
 
 async function downloadTick(cfg: SchedulerConfig): Promise<void> {
+  // A cluster delete is in flight - POST /api/sync would just 409, so skip the round-trip entirely.
+  if (isSyncPaused()) {
+    return
+  }
   // Lazy import so a Node build without global fetch still resolves - axios is already a dependency
   // and uses the Node http adapter here.
   const axios = (await import('axios')).default
@@ -209,5 +219,5 @@ export function stopScheduler(): void {
     clearTimeout(state.timers[key])
     delete state.timers[key]
   }
-  console.log('🛑 Sync scheduler stopped')
+  logger.info('sync.scheduler', 'Sync scheduler stopped')
 }

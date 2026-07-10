@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import db from '@/lib/sync/schema'
+import logger from '@/lib/logger'
 import type { GlobalCardRow } from '@/lib/sync/types'
 
 // GET /api/sync-engine/duplicates - cross-origin duplicate detection (the safe half of dedup).
@@ -91,6 +92,15 @@ export async function GET(request: NextRequest) {
     // A shared hash across DIFFERENT origin servers is the strong "same person on multiple servers"
     // signal; a shared hash within one origin is rarer but still a genuine duplicate worth review.
     const crossOriginGroups = groups.filter((g) => g.distinctOriginServers > 1).length
+    const duplicateCards = groups.reduce((sum, g) => sum + g.count, 0)
+
+    if (groups.length > 0) {
+      logger.info('sync.duplicates', `Duplicate scan: ${groups.length} group(s) found (${crossOriginGroups} cross-origin), ${duplicateCards} card(s) involved`, {
+        duplicateGroups: groups.length,
+        crossOriginGroups,
+        duplicateCards,
+      })
+    }
 
     return NextResponse.json({
       success: true,
@@ -99,7 +109,7 @@ export async function GET(request: NextRequest) {
         summary: {
           duplicateGroups: groups.length,
           crossOriginGroups,
-          duplicateCards: groups.reduce((sum, g) => sum + g.count, 0),
+          duplicateCards,
         },
       },
     })

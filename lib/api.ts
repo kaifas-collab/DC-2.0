@@ -87,7 +87,13 @@ class FRSDataManager {
         )
       }
     } catch (error) {
-      console.error('❌ Error during sync:', error)
+      // A 409 here means a DC cluster-delete is in flight and sync is intentionally paused - not
+      // an error, just expected backpressure. Anything else is a genuine sync failure.
+      if (axios.isAxiosError(error) && error.response?.status === 409 && error.response.data?.paused) {
+        console.log('⏸️ Sync is paused while a delete is in progress - will resume automatically')
+      } else {
+        console.error('❌ Error during sync:', error)
+      }
     } finally {
       this.syncStatus.isRefreshing = false
       this.notifyListeners()
