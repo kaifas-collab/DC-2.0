@@ -2,12 +2,12 @@
 
 import { useState } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import type { UnifiedCardData } from "@/lib/types"
+import type { LogicalCardData } from "@/lib/types"
 import { X, Trash2 } from "lucide-react"
 import FullFrameModal from "./FullFrameModal"
 
 interface CardDetailsDrawerProps {
-  card: UnifiedCardData
+  card: LogicalCardData
   onClose: () => void
   onDelete?: () => void
 }
@@ -15,50 +15,38 @@ interface CardDetailsDrawerProps {
 export default function CardDetailsDrawer({ card, onClose, onDelete }: CardDetailsDrawerProps) {
   const [showFullImage, setShowFullImage] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
-  const [deleteMode, setDeleteMode] = useState<'local' | 'both'>('local')
   const [isDeleting, setIsDeleting] = useState(false)
 
-  const handleDelete = async (mode: 'local' | 'both') => {
+  // The DC is the sole delete authority: one action removes the card from every connected FRS
+  // server (and the DC's own mapping) - there's no more "local only" option, since a local-only
+  // delete would just get auto-restored by the sync engine on the next cycle anyway.
+  const handleDelete = async () => {
     setIsDeleting(true)
-    
-    // Close drawer immediately for better UX
-    onClose()
-    
+
     try {
-      const endpoint = mode === 'both' ? '/api/cards/delete-from-frs' : '/api/cards/delete'
-      const response = await fetch(endpoint, {
+      const response = await fetch('/api/cards/cluster-delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          server_url: card.server_url,
-          card_id: card.card_id
-        })
+        body: JSON.stringify({ globalCardUuid: card.globalCardUuid })
       })
 
       const data = await response.json()
 
       if (!data.success) {
+        if (response.status === 409 && data.offlineServers) {
+          throw new Error(`Cannot delete - ${data.offlineServers.length} server(s) offline: ${data.offlineServers.join(', ')}`)
+        }
         throw new Error(data.error || 'Failed to delete card')
       }
 
-      // Call the parent's onDelete callback to refresh the list
+      onClose()
       if (onDelete) {
         onDelete()
       }
-      
-      // Show success message after operations complete
+
       setTimeout(() => {
-        if (mode === 'both' && data.operations) {
-          if (data.operations.frsDeleted) {
-            alert('✅ Card deleted from both FRS server and local database!')
-          } else {
-            alert(`⚠️ Card deleted locally, but FRS deletion failed:\n${data.operations.frsError}\n\nThe card will re-sync on next refresh.`)
-          }
-        } else {
-          alert('✅ Card deleted successfully!')
-        }
+        alert('✅ Delete started - propagating to all servers. It will disappear from the list once every server confirms.')
       }, 100)
-      
     } catch (error) {
       console.error('Failed to delete card:', error)
       alert(`Failed to delete card: ${error instanceof Error ? error.message : 'Unknown error'}`)
@@ -109,7 +97,7 @@ export default function CardDetailsDrawer({ card, onClose, onDelete }: CardDetai
           >
             <div className="relative aspect-square bg-muted overflow-hidden rounded-lg">
               <img
-                src={card.thumbnail_url || card.photo || "/placeholder.svg"}
+                src={card.photo || "/placeholder.svg"}
                 alt={card.name}
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
               />
@@ -124,11 +112,6 @@ export default function CardDetailsDrawer({ card, onClose, onDelete }: CardDetai
           {/* Details */}
           <div className="space-y-4">
             <div className="bg-muted/50 rounded-lg p-4">
-              <p className="text-xs text-muted-foreground mb-2">CARD ID</p>
-              <p className="font-mono text-sm font-semibold text-foreground">{card.card_id}</p>
-            </div>
-
-            <div className="bg-muted/50 rounded-lg p-4">
               <p className="text-xs text-muted-foreground mb-2">PERSON NAME</p>
               <p className="text-sm font-semibold text-foreground">{card.name}</p>
             </div>
@@ -140,29 +123,20 @@ export default function CardDetailsDrawer({ card, onClose, onDelete }: CardDetai
               </div>
             )}
 
-            <div className="bg-muted/50 rounded-lg p-4">
-              <p className="text-xs text-muted-foreground mb-2">SERVER</p>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-primary" />
-                <p className="text-sm font-semibold text-foreground">{card.server_name}</p>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">{card.server_location}</p>
-            </div>
-
-            {card.watchlist_name && (
+            {card.watchlist && (
               <div className="bg-muted/50 rounded-lg p-4">
                 <p className="text-xs text-muted-foreground mb-2">WATCHLIST</p>
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-primary" />
-                  <p className="text-sm font-semibold text-foreground">{card.watchlist_name}</p>
+                  <p className="text-sm font-semibold text-foreground">{card.watchlist}</p>
                 </div>
               </div>
             )}
 
-            {card.last_updated && (
+            {card.updatedAt && (
               <div className="bg-muted/50 rounded-lg p-4">
                 <p className="text-xs text-muted-foreground mb-2">LAST UPDATED</p>
-                <p className="text-sm text-foreground">{new Date(card.last_updated).toLocaleString()}</p>
+                <p className="text-sm text-foreground">{new Date(card.updatedAt).toLocaleString()}</p>
               </div>
             )}
           </div>
@@ -173,44 +147,11 @@ export default function CardDetailsDrawer({ card, onClose, onDelete }: CardDetai
           {showDeleteConfirm ? (
             <>
               <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 mb-3">
-                <p className="text-sm text-destructive font-medium">Choose deletion option:</p>
+                <p className="text-sm text-destructive font-medium">Delete everywhere?</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {deleteMode === 'local' 
-                    ? 'Delete only from local database. Card will re-sync from FRS server.'
-                    : 'Delete from both FRS server and local database. This is permanent!'}
+                  This removes the card from every connected FRS server and cannot be undone. If any
+                  server is currently offline, the delete will be blocked.
                 </p>
-              </div>
-
-              {/* Delete Mode Toggle */}
-              <div className="grid grid-cols-2 gap-2 mb-3">
-                <button
-                  onClick={() => setDeleteMode('local')}
-                  disabled={isDeleting}
-                  className={`py-2 px-3 text-xs font-medium rounded-lg transition-all ${
-                    deleteMode === 'local'
-                      ? 'bg-orange-500/20 text-orange-600 border-2 border-orange-500'
-                      : 'bg-muted text-muted-foreground border-2 border-transparent hover:border-muted-foreground/20'
-                  }`}
-                >
-                  <div className="flex flex-col items-center gap-1">
-                    <span>Local Only</span>
-                    <span className="text-[10px] opacity-70">Will re-sync</span>
-                  </div>
-                </button>
-                <button
-                  onClick={() => setDeleteMode('both')}
-                  disabled={isDeleting}
-                  className={`py-2 px-3 text-xs font-medium rounded-lg transition-all ${
-                    deleteMode === 'both'
-                      ? 'bg-destructive/20 text-destructive border-2 border-destructive'
-                      : 'bg-muted text-muted-foreground border-2 border-transparent hover:border-muted-foreground/20'
-                  }`}
-                >
-                  <div className="flex flex-col items-center gap-1">
-                    <span>FRS + Local</span>
-                    <span className="text-[10px] opacity-70">Permanent</span>
-                  </div>
-                </button>
               </div>
 
               <div className="flex gap-3">
@@ -222,7 +163,7 @@ export default function CardDetailsDrawer({ card, onClose, onDelete }: CardDetai
                   Cancel
                 </button>
                 <button
-                  onClick={() => handleDelete(deleteMode)}
+                  onClick={handleDelete}
                   disabled={isDeleting}
                   className="flex-1 py-2 px-4 text-sm font-medium text-white bg-destructive rounded-lg hover:bg-destructive/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                 >
@@ -234,7 +175,7 @@ export default function CardDetailsDrawer({ card, onClose, onDelete }: CardDetai
                   ) : (
                     <>
                       <Trash2 className="w-4 h-4" />
-                      Delete {deleteMode === 'both' ? 'Permanently' : 'Locally'}
+                      Delete Everywhere
                     </>
                   )}
                 </button>
@@ -243,14 +184,11 @@ export default function CardDetailsDrawer({ card, onClose, onDelete }: CardDetai
           ) : (
             <>
               <button
-                onClick={() => {
-                  setDeleteMode('local')
-                  setShowDeleteConfirm(true)
-                }}
+                onClick={() => setShowDeleteConfirm(true)}
                 className="w-full py-2 px-4 text-sm font-medium text-destructive bg-destructive/10 rounded-lg hover:bg-destructive/20 transition-colors flex items-center justify-center gap-2"
               >
                 <Trash2 className="w-4 h-4" />
-                Delete Card
+                Delete Everywhere
               </button>
               <button
                 onClick={onClose}
@@ -266,7 +204,7 @@ export default function CardDetailsDrawer({ card, onClose, onDelete }: CardDetai
       {/* Fullscreen Modal */}
       {showFullImage && (
         <FullFrameModal
-          imageUrl={card.fullframe_url || card.photo || "/placeholder.svg"}
+          imageUrl={card.photo || "/placeholder.svg"}
           personName={card.name}
           onClose={() => setShowFullImage(false)}
         />

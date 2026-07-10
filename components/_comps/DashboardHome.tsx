@@ -34,44 +34,39 @@ export default function DashboardHome() {
     setIsMounted(true)
   }, [])
 
-  // Health check function - using ping for fast network check
+  // Health check function - real FRS-API check (not ICMP ping), so a server that responds to
+  // ping but has its FRS service down correctly shows as offline.
   const checkServerHealth = async (server: any) => {
     try {
-      // Extract IP from baseURL (handles http://192.168.0.156/ format)
-      const ipMatch = server.baseURL?.match(/\/\/([^:/]+)/)
-      const ip = ipMatch ? ipMatch[1] : server.ip
-      
-      if (!ip) {
-        console.log(`❌ No IP found for ${server.name}`)
+      if (!server.name) {
+        console.log(`❌ No server name found for health check`)
         return false
       }
 
-      // Fetch with no-cors mode won't work for API, but we can force it through
-      // by using keepalive and ignoring browser's online/offline status
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 5000)
+      const timeoutId = setTimeout(() => controller.abort(), 8000)
 
       try {
         const response = await fetch('/api/health-check', {
           method: 'POST',
-          headers: { 
+          headers: {
             'Content-Type': 'application/json',
             'Cache-Control': 'no-cache, no-store, must-revalidate',
             'Pragma': 'no-cache'
           },
-          body: JSON.stringify({ ip }),
+          body: JSON.stringify({ serverName: server.name }),
           signal: controller.signal,
           cache: 'no-store',
           keepalive: true
         })
-        
+
         clearTimeout(timeoutId)
-        
+
         if (!response.ok) {
           console.log(`❌ Health check response not OK for ${server.name}: ${response.status}`)
           return false
         }
-        
+
         const result = await response.json()
         console.log(`🏥 Health check result for ${server.name}:`, result)
         return result.success && result.online
@@ -255,90 +250,63 @@ export default function DashboardHome() {
           const isLoading = healthCheckLoading
           
           return (
-            <div key={server.ip}>
-              <Link href={`/server?ip=${encodeURIComponent(server.ip)}`}>
-                <Card className={`h-full p-6 transition-all duration-300 ${
-                  isOnline 
-                    ? 'cursor-pointer hover:shadow-lg hover:border-primary/50 bg-card hover:bg-card/80' 
-                    : 'cursor-pointer opacity-75 bg-card/50 border border-dashed border-red-400'
-                }`}>
-                  <div className="flex items-start justify-between mb-4">
-                    <div className="flex items-center gap-3">
-                      <div className={`p-2 rounded-lg ${
-                        isOnline ? 'bg-primary/10' : 'bg-red-100 dark:bg-red-900'
-                      }`}>
-                        <Server className={`w-5 h-5 ${
-                          isOnline ? 'text-primary' : 'text-red-600 dark:text-red-400'
-                        }`} />
-                      </div>
-                      <div>
-                        <h3 className="font-semibold text-foreground">{server.name}</h3>
-                        <p className="text-xs text-muted-foreground">{server.location}</p>
-                      </div>
+            <Card key={server.ip} className={`h-full p-6 transition-all duration-300 ${
+              isOnline ? 'bg-card' : 'opacity-75 bg-card/50 border border-dashed border-red-400'
+            }`}>
+              <div className="flex items-start justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className={`p-2 rounded-lg ${
+                    isOnline ? 'bg-primary/10' : 'bg-red-100 dark:bg-red-900'
+                  }`}>
+                    <Server className={`w-5 h-5 ${
+                      isOnline ? 'text-primary' : 'text-red-600 dark:text-red-400'
+                    }`} />
+                  </div>
+                  <h3 className="font-semibold text-foreground">{server.name}</h3>
+                </div>
+
+                {/* Real-time status indicator */}
+                {isLoading ? (
+                  <div className="animate-pulse">
+                    <div className="w-2 h-2 bg-gray-400 rounded-full"></div>
+                  </div>
+                ) : (
+                  <div className={`w-2 h-2 rounded-full ${
+                    isOnline ? 'bg-green-500 animate-pulse' : 'bg-red-500'
+                  }`} />
+                )}
+              </div>
+
+              <div className="space-y-3 mt-6 pt-4 border-t border-border">
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">IP Address</p>
+                  <p className="font-mono text-sm text-foreground">{server.ip}</p>
+                </div>
+                <div className="flex items-center gap-2 text-xs">
+                  {isLoading ? (
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-gray-400"></div>
+                      <span>Checking...</span>
                     </div>
-                    
-                    {/* Real-time status indicator */}
-                    {isLoading ? (
-                      <div className="animate-pulse">
-                        <div className="w-2 h-2 bg-gray-400 rounded-full"></div>
-                      </div>
-                    ) : (
-                      <div className={`w-2 h-2 rounded-full ${
-                        isOnline ? 'bg-green-500 animate-pulse' : 'bg-red-500'
+                  ) : (
+                    <>
+                      <div className={`w-1.5 h-1.5 rounded-full ${
+                        isOnline ? 'bg-green-500' : 'bg-red-500'
                       }`} />
-                    )}
-                  </div>
-
-                  <div className="space-y-3 mt-6 pt-4 border-t border-border">
-                    <div>
-                      <p className="text-xs text-muted-foreground mb-1">IP Address</p>
-                      <p className="font-mono text-sm text-foreground">{server.ip}</p>
-                    </div>
-                    <div className="flex items-center gap-2 text-xs">
-                      {isLoading ? (
-                        <div className="flex items-center gap-2 text-muted-foreground">
-                          <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-gray-400"></div>
-                          <span>Checking...</span>
-                        </div>
-                      ) : (
-                        <>
-                          <div className={`w-1.5 h-1.5 rounded-full ${
-                            isOnline ? 'bg-green-500' : 'bg-red-500'
-                          }`} />
-                          <span className={
-                            isOnline 
-                              ? 'text-green-600 dark:text-green-400 font-medium' 
-                              : 'text-red-600 dark:text-red-400 font-medium'
-                          }>
-                            {isOnline ? 'Online' : 'Offline'}
-                          </span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="mt-6 pt-4 border-t border-border">
-                    <button 
-                      className={`w-full py-2 px-3 text-sm font-medium rounded-lg transition-colors ${
-                        isOnline 
-                          ? 'text-primary bg-primary/10 hover:bg-primary/20' 
-                          : 'text-red-600 bg-muted border border-red-400'
-                      }`}
-                      // Always enabled
-                    >
-                      {isLoading ? 'Checking...' : isOnline ? 'View Records' : 'View Records (Offline)'}
-                    </button>
-                    {!isOnline && !isLoading && (
-                      <div className="mt-2 text-xs text-red-500 text-center">
-                        Server is offline. Showing last known data.
-                      </div>
-                    )}
-                  </div>
-                </Card>
-              </Link>
-            </div>
+                      <span className={
+                        isOnline
+                          ? 'text-green-600 dark:text-green-400 font-medium'
+                          : 'text-red-600 dark:text-red-400 font-medium'
+                      }>
+                        {isOnline ? 'Online' : 'Offline'}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+            </Card>
           )
-        })}  
+        })}
         </div>
 
         {/* Pagination */}

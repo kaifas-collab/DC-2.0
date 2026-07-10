@@ -6,7 +6,7 @@ import Image from "next/image"
 import Link from "next/link"
 import { frsDataManager } from "@/lib/api"
 import { useServerConfig } from "@/hooks/useServerConfig"
-import { Card, CardContent, CardHeader } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import SearchBar from "./SearchBar"
@@ -16,17 +16,15 @@ import {
   RefreshCw,
   Clock,
   Server,
-  Users,
   AlertCircle,
   CheckCircle,
   Grid3x3,
   Calendar,
-  Eye,
   CheckSquare,
   Trash2,
   Check
 } from "lucide-react"
-import type { UnifiedCardData, SyncStatus } from "@/lib/types"
+import type { LogicalCardData, SyncStatus } from "@/lib/types"
 import CardDetailsDrawer from "./CardDetailsDrawer"
 
 export default function DashboardPage() {
@@ -34,8 +32,8 @@ export default function DashboardPage() {
   const { legacyServers } = useServerConfig()
 
   const [searchQuery, setSearchQuery] = useState("")
-  const [allCards, setAllCards] = useState<UnifiedCardData[]>([])
-  const [selectedCard, setSelectedCard] = useState<UnifiedCardData | null>(null)
+  const [allCards, setAllCards] = useState<LogicalCardData[]>([])
+  const [selectedCard, setSelectedCard] = useState<LogicalCardData | null>(null)
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({
     lastSync: null,
     nextSync: null,
@@ -68,7 +66,7 @@ export default function DashboardPage() {
         })
         if (searchQuery.trim()) params.set('search', searchQuery.trim())
 
-        const res = await fetch(`/api/cards?${params}`, { signal: controller.signal })
+        const res = await fetch(`/api/logical-cards?${params}`, { signal: controller.signal })
         const json = await res.json()
 
         if (json.success && !controller.signal.aborted) {
@@ -100,16 +98,6 @@ export default function DashboardPage() {
     return () => { if (typeof unsubscribe === 'function') unsubscribe() }
   }, [])
 
-  // Keep the "Total Records" stat tile accurate from the real database count (already fetched
-  // above via the cheap /api/cards call) instead of frsDataManager's in-memory totalCards, which
-  // resets to 0 on every page load/reload and previously caused a full FRS force-sync to fire on
-  // every refresh - not just on the Force Refresh button or the scheduled interval as intended.
-  useEffect(() => {
-    if (totalItems > 0) {
-      setSyncStatus((prev) => (prev.totalCards === totalItems ? prev : { ...prev, totalCards: totalItems }))
-    }
-  }, [totalItems])
-
   const handleManualRefresh = async () => {
     try {
       await frsDataManager.manualRefresh()
@@ -135,7 +123,7 @@ export default function DashboardPage() {
   }
 
   const selectAll = () => {
-    const allCardKeys = new Set(allCards.map((c: UnifiedCardData) => `${c.server_url}-${c.card_id}`))
+    const allCardKeys = new Set(allCards.map((c: LogicalCardData) => c.globalCardUuid))
     setSelectedCards(allCardKeys)
   }
 
@@ -143,60 +131,47 @@ export default function DashboardPage() {
     setSelectedCards(new Set())
   }
 
-  const handleBulkDelete = async (deleteFromFRS: boolean) => {
+  // The DC is the sole delete authority: each selected card is deleted from every connected FRS
+  // server via the cluster-delete endpoint (async, blocked if any server is offline). There's no
+  // more "central only" option, since a central-only delete would just get auto-restored.
+  const handleBulkDelete = async () => {
     if (selectedCards.size === 0) return
 
     const confirmed = confirm(
-      `Are you sure you want to delete ${selectedCards.size} record(s)?${
-        deleteFromFRS 
-          ? '\n\nThis will delete from BOTH the FRS server and central database.' 
-          : '\n\nThis will delete from central database only.'
-      }\n\nThis action cannot be undone!`
+      `Delete ${selectedCards.size} record(s) from EVERY connected server?\n\nThis cannot be undone, and will be blocked if any server is currently offline.`
     )
 
     if (!confirmed) return
 
     setIsDeleting(true)
     try {
-      // Build the cards array from selectedCards
-      const cardsToDelete = Array.from(selectedCards).map(cardKey => {
-        const card = allCards.find(c => `${c.server_url}-${c.card_id}` === cardKey)
-        return {
-          server_url: card?.server_url || '',
-          card_id: card?.card_id || ''
-        }
-      }).filter(c => c.server_url && c.card_id)
+      const globalCardUuids = Array.from(selectedCards)
 
-      const response = await fetch('/api/cards/bulk-delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          cards: cardsToDelete,
-          deleteFromFRS
-        })
-      })
+      const results = await Promise.allSettled(
+        globalCardUuids.map(globalCardUuid =>
+          fetch('/api/cards/cluster-delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ globalCardUuid })
+          }).then(res => res.json())
+        )
+      )
 
-      const data = await response.json()
+      const started = results.filter(r => r.status === 'fulfilled' && (r.value as any).success).length
+      const failed = results.length - started
 
-      if (data.success || data.results.localDeleted > 0) {
-        // Optimistic update
-        setAllCards(prevCards => prevCards.filter(c => !selectedCards.has(`${c.server_url}-${c.card_id}`)))
-        setSelectedCards(new Set())
-        setSelectionMode(false)
-        
-        setTimeout(() => {
-          alert(
-            `Bulk Delete Results:\n\n` +
-            `✅ Central: ${data.results.localDeleted} deleted, ${data.results.localFailed} failed\n` +
-            (deleteFromFRS ? `✅ FRS: ${data.results.frsDeleted} deleted, ${data.results.frsFailed} failed\n` : '')
-          )
-        }, 100)
-        
-        // Reload in background
-        setTimeout(() => handleManualRefresh(), 1000)
-      } else {
-        throw new Error(data.error || 'Bulk delete failed')
-      }
+      setSelectedCards(new Set())
+      setSelectionMode(false)
+
+      setTimeout(() => {
+        alert(
+          `Delete started for ${started} record(s).` +
+          (failed > 0 ? `\n${failed} could not be started (see console) - often because a server is offline.` : '') +
+          `\n\nRecords will disappear once every server confirms.`
+        )
+      }, 100)
+
+      setTimeout(() => handleManualRefresh(), 1000)
     } catch (error) {
       console.error('Bulk delete error:', error)
       alert(`Failed to delete records: ${error instanceof Error ? error.message : 'Unknown error'}`)
@@ -207,16 +182,16 @@ export default function DashboardPage() {
 
   const handleDeleteCard = async () => {
     // Store the card key before clearing state
-    const deletedCardKey = selectedCard ? `${selectedCard.server_url}-${selectedCard.card_id}` : null
-    
+    const deletedGlobalCardUuid = selectedCard?.globalCardUuid ?? null
+
     // Clear the selected card immediately to close drawer
     setSelectedCard(null)
-    
+
     // Optimistic update - remove the deleted card from UI
-    if (deletedCardKey) {
-      setAllCards(prevCards => prevCards.filter(c => `${c.server_url}-${c.card_id}` !== deletedCardKey))
+    if (deletedGlobalCardUuid) {
+      setAllCards(prevCards => prevCards.filter(c => c.globalCardUuid !== deletedGlobalCardUuid))
     }
-    
+
     // Reload in background to ensure sync
     setTimeout(() => handleManualRefresh(), 1000)
   }
@@ -326,17 +301,7 @@ export default function DashboardPage() {
               {selectedCards.size > 0 && (
                 <div className="flex items-center gap-2">
                   <Button
-                    onClick={() => handleBulkDelete(false)}
-                    disabled={isDeleting}
-                    variant="outline"
-                    size="sm"
-                    className="gap-2 text-orange-600 hover:text-orange-700 hover:bg-orange-50 dark:hover:bg-orange-950"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    Delete in Central ({selectedCards.size})
-                  </Button>
-                  <Button
-                    onClick={() => handleBulkDelete(true)}
+                    onClick={handleBulkDelete}
                     disabled={isDeleting}
                     variant="destructive"
                     size="sm"
@@ -350,7 +315,7 @@ export default function DashboardPage() {
                     ) : (
                       <>
                         <Trash2 className="w-4 h-4" />
-                        Delete in Both ({selectedCards.size})
+                        Delete Everywhere ({selectedCards.size})
                       </>
                     )}
                   </Button>
@@ -370,22 +335,7 @@ export default function DashboardPage() {
           animate={{ opacity: 1 }}
           transition={{ duration: 0.5 }}
         >
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-            {/* Total Cards */}
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-blue-100 dark:bg-blue-900 rounded-lg">
-                    <Users className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-                  </div>
-                  <div>
-                    <p className="text-2xl font-bold text-foreground">{syncStatus.totalCards}</p>
-                    <p className="text-xs text-muted-foreground">Total Cards</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
             {/* Server Status */}
             <Card>
               <CardContent className="p-4">
@@ -489,7 +439,7 @@ export default function DashboardPage() {
           </div>
 
           <SearchBar
-            placeholder="Search records by name, watchlist, server, or record ID..."
+            placeholder="Search records by name..."
             value={searchQuery}
             onChange={setSearchQuery}
           />
@@ -505,108 +455,72 @@ export default function DashboardPage() {
           <>
             <motion.div
               key={`cards-grid-${allCards.length}-${searchQuery}-${currentPage}`}
-              className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
+              className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3"
               variants={containerVariants}
               initial="hidden"
               animate="visible"
             >
               {allCards.map((card) => {
-              const cardKey = `${card.server_url}-${card.card_id}`
+              const cardKey = card.globalCardUuid
               const isSelected = selectedCards.has(cardKey)
-              
+
               return (
                 <motion.div key={cardKey} variants={itemVariants}>
-                  <Card 
-                    className={`h-full cursor-pointer transition-all duration-300 bg-card hover:bg-card/80 group ${
-                      isSelected 
-                        ? 'ring-2 ring-primary border-primary shadow-lg' 
+                  <Card
+                    className={`h-full cursor-pointer transition-all duration-300 bg-card hover:bg-card/80 group overflow-hidden ${
+                      isSelected
+                        ? 'ring-2 ring-primary border-primary shadow-lg'
                         : 'hover:shadow-lg hover:border-primary/50'
                     }`}
                     onClick={(e) => {
                       if (selectionMode) {
                         e.stopPropagation()
                         handleCardSelect(cardKey, !isSelected)
+                      } else {
+                        setSelectedCard(card)
                       }
                     }}
                   >
-                    <CardHeader className="p-4 pb-2">
-                      <div className="flex items-start justify-between mb-3">
-                        <div className="flex-1">
-                          <h3 className="font-semibold text-foreground line-clamp-1">{card.name}</h3>
-                          <p className="text-xs text-muted-foreground mt-1">ID: {card.card_id}</p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {selectionMode && (
-                            <div 
-                              className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${
-                                isSelected 
-                                  ? 'bg-primary border-primary' 
-                                  : 'bg-background border-muted-foreground/30 group-hover:border-primary/50'
-                              }`}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleCardSelect(cardKey, !isSelected)
-                              }}
-                            >
-                              {isSelected && <Check className="w-4 h-4 text-primary-foreground" />}
-                            </div>
-                          )}
-                          <Badge variant="secondary" className="text-xs">
-                            {card.server_name}
-                          </Badge>
-                        </div>
-                      </div>
-                    </CardHeader>
-                  
-                    <CardContent className="p-4 pt-0">
-                      {/* Thumbnail */}
-                      <div className="relative h-48 mb-4 bg-muted rounded-lg overflow-hidden">
-                        <Image
-                          src={card.thumbnail_url}
-                          alt={card.name}
-                          fill
-                          className="object-contain group-hover:scale-105 transition-transform duration-300"
-                          onError={(e) => {
-                            const target = e.target as HTMLImageElement
-                            target.src = '/placeholder-user.jpg'
+                    {/* Thumbnail - the dominant element */}
+                    <div className="relative aspect-square bg-muted overflow-hidden">
+                      <Image
+                        src={card.photo || '/placeholder-user.jpg'}
+                        alt={card.name}
+                        fill
+                        className="object-cover group-hover:scale-105 transition-transform duration-300"
+                        onError={(e) => {
+                          const target = e.target as HTMLImageElement
+                          target.src = '/placeholder-user.jpg'
+                        }}
+                      />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors duration-300" />
+                      {selectionMode && (
+                        <div
+                          className={`absolute top-2 right-2 w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${
+                            isSelected
+                              ? 'bg-primary border-primary'
+                              : 'bg-background/80 border-muted-foreground/30 group-hover:border-primary/50'
+                          }`}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleCardSelect(cardKey, !isSelected)
                           }}
-                        />
-                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors duration-300" />
-                      </div>
+                        >
+                          {isSelected && <Check className="w-4 h-4 text-primary-foreground" />}
+                        </div>
+                      )}
+                    </div>
 
-                      {/* Card Details */}
-                      <div className="space-y-3">
-                        <div>
-                          <p className="text-xs text-muted-foreground mb-1">Watchlist</p>
-                          <Badge variant="outline" className="text-xs">
-                            {card.watchlist_name}
-                          </Badge>
-                        </div>
-                      
-                        <div>
-                          <p className="text-xs text-muted-foreground mb-1">Last Updated</p>
-                          <p className="text-xs text-foreground">
-                            {new Date(card.last_updated).toLocaleDateString()}
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Action Button */}
-                      {!selectionMode && (
-                        <div className="mt-4 pt-3 border-t border-border">
-                          <Button 
-                            variant="outline" 
-                            size="sm" 
-                            className="w-full gap-2 text-xs"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setSelectedCard(card)
-                            }}
-                          >
-                            <Eye className="w-3 h-3" />
-                            View Details
-                          </Button>
-                        </div>
+                    {/* Compact caption */}
+                    <CardContent className="p-2 space-y-1">
+                      <h3 className="font-semibold text-sm text-foreground line-clamp-1">{card.name}</h3>
+                      {card.watchlist && (
+                        <Badge variant="outline" className="text-xs">
+                          {card.watchlist}
+                        </Badge>
+                      )}
+                      {card.comment && (
+                        <p className="text-xs text-muted-foreground line-clamp-1">{card.comment}</p>
                       )}
                     </CardContent>
                   </Card>

@@ -100,6 +100,18 @@ export interface UnifiedCardData {
   galleries?: any[];
 }
 
+// Logical Card (one row per real-world person, deduplicated across every server that holds a
+// copy - see lib/logicalCards.ts). Deliberately excludes local_card_id/server_name: those are
+// physical-placement details the deduplicated view shouldn't expose.
+export interface LogicalCardData {
+  globalCardUuid: string;
+  name: string;
+  comment: string;
+  watchlist: string;
+  photo: string | null;
+  updatedAt: string;
+}
+
 // Sync Status
 export interface SyncStatus {
   lastSync: Date | null;

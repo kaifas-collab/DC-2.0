@@ -72,6 +72,9 @@ db.exec(`
 db.exec(`CREATE INDEX IF NOT EXISTS idx_global_cards_image_hash ON global_cards(image_hash)`)
 db.exec(`CREATE INDEX IF NOT EXISTS idx_global_cards_metadata_hash ON global_cards(metadata_hash)`)
 db.exec(`CREATE INDEX IF NOT EXISTS idx_global_cards_status_updated ON global_cards(status, updated_at)`)
+// name LIKE '%q%' still full-scans (LIKE can't use a plain index for a leading wildcard), but this
+// at least gets exact/prefix lookups for free; graduating to FTS is a documented scale follow-up.
+db.exec(`CREATE INDEX IF NOT EXISTS idx_global_cards_name ON global_cards(name)`)
 
 // Migration: comment joins name as a first-class column (not buried in metadata_json) so the
 // worker can read it directly when pushing create/update calls to a mirror, same as name.
