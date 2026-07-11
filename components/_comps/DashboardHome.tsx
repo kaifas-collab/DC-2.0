@@ -5,9 +5,11 @@ import Link from "next/link"
 import { motion } from "framer-motion"
 import { useServerConfig } from "@/hooks/useServerConfig"
 import { Card } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
 import SearchBar from "./SearchBar"
 import ThemeToggle from "./ThemeToggle"
 import Pagination from "./Pagination"
+import AddServerDialog from "./AddServerDialog"
 import {
   RefreshCw,
   Clock,
@@ -17,16 +19,22 @@ import {
   CheckCircle,
   Grid3x3,
   Calendar,
-  Eye
+  Eye,
+  Plus
 } from "lucide-react"
 
+// Server status dots poll on this fixed cadence, decoupled from the (much longer) sync interval so
+// online/offline stays current instead of only re-checking once per sync cycle.
+const HEALTH_CHECK_INTERVAL_MS = 60_000
+
 export default function DashboardHome() {
-  const { config, legacyServers } = useServerConfig()
+  const { config, legacyServers, refetch } = useServerConfig()
   const [searchQuery, setSearchQuery] = useState("")
   const [isMounted, setIsMounted] = useState(false)
   const [serverHealth, setServerHealth] = useState<Record<string, boolean>>({})
   const [healthCheckLoading, setHealthCheckLoading] = useState(true)
   const [currentPage, setCurrentPage] = useState(1)
+  const [addServerOpen, setAddServerOpen] = useState(false)
   const itemsPerPage = 10
 
   // Ensure animations only run after hydration
@@ -107,18 +115,17 @@ export default function DashboardHome() {
     const initialCheckTimer = setTimeout(() => {
       checkAllServers()
     }, 2000)
-    
-    // Recheck based on config refresh interval (convert seconds to milliseconds)
-    const healthCheckInterval = (config.refreshIntervalSeconds || 240) * 1000
-    const interval = setInterval(checkAllServers, healthCheckInterval)
-    
-    console.log(`🏥 Health check interval set to ${healthCheckInterval/1000} seconds`)
-    
+
+    // Fixed cadence, independent of the sync interval, so status stays current (see constant above).
+    const interval = setInterval(checkAllServers, HEALTH_CHECK_INTERVAL_MS)
+
     return () => {
       clearTimeout(initialCheckTimer)
       clearInterval(interval)
     }
-  }, [])
+    // Re-run when the server list changes (e.g. after adding a server) so a new server starts being
+    // health-checked immediately.
+  }, [config.servers])
 
   const filteredServers = useMemo(() => {
     const query = searchQuery.toLowerCase().trim()
@@ -211,6 +218,10 @@ export default function DashboardHome() {
               </p>
             </div>
             <div className="flex items-center gap-4">
+              <Button onClick={() => setAddServerOpen(true)} variant="outline" size="sm" className="gap-2">
+                <Plus className="w-4 h-4" />
+                Add Server
+              </Button>
               <Link href="/dashboard">
                 <button className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-sm font-medium">
                   View All Records
@@ -332,6 +343,12 @@ export default function DashboardHome() {
           </motion.div>
         )}
       </main>
+
+      <AddServerDialog
+        open={addServerOpen}
+        onOpenChange={setAddServerOpen}
+        onSuccess={refetch}
+      />
     </div>
   )
 }

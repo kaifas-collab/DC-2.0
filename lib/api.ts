@@ -21,6 +21,10 @@ class FRSDataManager {
     refreshInterval: CONFIG.refreshIntervalSeconds,
   }
   private refreshInterval: NodeJS.Timeout | null = null
+  // Current auto-refresh cadence in seconds. Seeded from the static config import, but can be changed
+  // at runtime via updateRefreshInterval() (see the interval picker on the Records page) so a new
+  // interval takes effect immediately instead of only after a page reload.
+  private refreshIntervalSeconds: number = CONFIG.refreshIntervalSeconds
   private listeners: Set<(status: SyncStatus) => void> = new Set()
 
   constructor() {
@@ -46,13 +50,13 @@ class FRSDataManager {
     this.listeners.forEach(callback => callback({ ...this.syncStatus }))
   }
 
-  // Initialize auto-refresh timer
+  // Initialize (or restart) the auto-refresh timer using the current interval.
   private initAutoRefresh() {
     if (this.refreshInterval) {
       clearInterval(this.refreshInterval)
     }
-    
-    const intervalMs = CONFIG.refreshIntervalSeconds * 1000
+
+    const intervalMs = this.refreshIntervalSeconds * 1000
     this.refreshInterval = setInterval(() => {
       this.refreshAllData()
     }, intervalMs)
@@ -60,6 +64,19 @@ class FRSDataManager {
     // Set next sync time
     this.syncStatus.nextSync = new Date(Date.now() + intervalMs)
     this.notifyListeners()
+  }
+
+  // Change the auto-refresh cadence at runtime and restart the timer, so a saved interval applies
+  // without a page reload. Called by the Records page after PATCH /api/config succeeds.
+  updateRefreshInterval(seconds: number) {
+    if (!Number.isFinite(seconds) || seconds <= 0) return
+    this.refreshIntervalSeconds = seconds
+    this.syncStatus.refreshInterval = seconds
+    if (!isServer && typeof window !== 'undefined') {
+      this.initAutoRefresh()
+    } else {
+      this.notifyListeners()
+    }
   }
 
   // Refresh all data from all servers
@@ -83,7 +100,7 @@ class FRSDataManager {
         this.syncStatus.totalCards = response.data.stats.totalCards
         this.syncStatus.lastSync = new Date()
         this.syncStatus.nextSync = new Date(
-          Date.now() + CONFIG.refreshIntervalSeconds * 1000
+          Date.now() + this.refreshIntervalSeconds * 1000
         )
       }
     } catch (error) {

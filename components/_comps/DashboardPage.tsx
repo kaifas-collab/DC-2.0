@@ -29,7 +29,7 @@ import CardDetailsDrawer from "./CardDetailsDrawer"
 
 export default function DashboardPage() {
   console.log("🏠 DashboardPage: Component function executing")
-  const { legacyServers } = useServerConfig()
+  const { config, legacyServers, refetch: refetchConfig } = useServerConfig()
 
   const [searchQuery, setSearchQuery] = useState("")
   const [allCards, setAllCards] = useState<LogicalCardData[]>([])
@@ -50,7 +50,15 @@ export default function DashboardPage() {
   const [currentPage, setCurrentPage] = useState(1)
   const [totalItems, setTotalItems] = useState(0)
   const [syncVersion, setSyncVersion] = useState(0)
+  const [intervalHours, setIntervalHours] = useState("")
+  const [savingInterval, setSavingInterval] = useState(false)
   const itemsPerPage = 10
+
+  // Seed the interval input from the live config once it loads (config is in seconds; operators
+  // pick hours). Kept in a string so the field can be edited freely.
+  useEffect(() => {
+    setIntervalHours(String(config.refreshIntervalSeconds / 3600))
+  }, [config.refreshIntervalSeconds])
 
   // Fetch page from server — debounced for search, immediate for page/sync changes
   useEffect(() => {
@@ -104,6 +112,36 @@ export default function DashboardPage() {
       // sync subscription handles setCurrentPage(1) + setSyncVersion → re-fetch
     } catch (error) {
       console.error("❌ Manual refresh failed:", error)
+    }
+  }
+
+  // Persist a new sync interval (operators enter hours; config stores seconds), then apply it to the
+  // live auto-refresh timer so it takes effect without a page reload.
+  const handleSaveInterval = async () => {
+    const hours = Number(intervalHours)
+    if (!Number.isFinite(hours) || hours <= 0) {
+      alert("Enter a positive number of hours.")
+      return
+    }
+
+    setSavingInterval(true)
+    try {
+      const res = await fetch("/api/config", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hours }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to save interval")
+      }
+      frsDataManager.updateRefreshInterval(data.refreshIntervalSeconds)
+      refetchConfig()
+    } catch (error) {
+      console.error("❌ Failed to save sync interval:", error)
+      alert(`Failed to save interval: ${error instanceof Error ? error.message : "Unknown error"}`)
+    } finally {
+      setSavingInterval(false)
     }
   }
 
@@ -426,11 +464,24 @@ export default function DashboardPage() {
             </div>
             
             <div className="text-right">
-              <div className="text-lg font-medium text-muted-foreground">
-                Auto-refresh every {syncStatus.refreshInterval}s
+              <div className="flex items-center justify-end gap-2">
+                <span className="text-sm text-muted-foreground">Sync every</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={intervalHours}
+                  onChange={(e) => setIntervalHours(e.target.value)}
+                  disabled={savingInterval}
+                  className="w-16 rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground text-right focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50"
+                />
+                <span className="text-sm text-muted-foreground">hours</span>
+                <Button onClick={handleSaveInterval} disabled={savingInterval} variant="outline" size="sm">
+                  {savingInterval ? "Saving..." : "Save"}
+                </Button>
               </div>
               {syncStatus.isRefreshing && (
-                <div className="flex items-center gap-2 text-blue-600 dark:text-blue-400">
+                <div className="mt-1 flex items-center justify-end gap-2 text-blue-600 dark:text-blue-400">
                   <RefreshCw className="w-4 h-4 animate-spin" />
                   <span className="text-sm">Syncing...</span>
                 </div>
