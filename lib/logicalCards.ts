@@ -11,6 +11,7 @@ function mapRow(row: {
   comment: string | null
   metadata_json: string | null
   image_ref: string | null
+  thumbnail_ref: string | null
   updated_at: string
 }): LogicalCardData {
   let watchlist = ''
@@ -28,12 +29,15 @@ function mapRow(row: {
     name: row.name || 'Unknown',
     comment: row.comment || '',
     watchlist,
+    // Cards synced before thumbnail_ref existed (or whose origin hasn't changed since) have no
+    // thumbnail yet - fall back to the full photo rather than showing nothing.
+    thumbnail: row.thumbnail_ref || row.image_ref,
     photo: row.image_ref,
     updatedAt: row.updated_at,
   }
 }
 
-const SELECT_COLUMNS = `global_card_uuid, name, comment, metadata_json, image_ref, updated_at`
+const SELECT_COLUMNS = `global_card_uuid, name, comment, metadata_json, image_ref, thumbnail_ref, updated_at`
 
 const getLogicalCardsStmt = db.prepare(`
   SELECT ${SELECT_COLUMNS} FROM global_cards

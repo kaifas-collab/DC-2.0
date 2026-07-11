@@ -108,6 +108,11 @@ export interface LogicalCardData {
   name: string;
   comment: string;
   watchlist: string;
+  // Small cropped face image for list/grid display. Falls back to `photo` (the full source image)
+  // if no thumbnail has been captured for this card yet.
+  thumbnail: string | null;
+  // Full-quality source photo - same image actually mirrored to other FRS servers. Used for the
+  // "view full size" modal.
   photo: string | null;
   updatedAt: string;
 }

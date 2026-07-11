@@ -97,7 +97,7 @@ export default function CardDetailsDrawer({ card, onClose, onDelete }: CardDetai
           >
             <div className="relative aspect-square bg-muted overflow-hidden rounded-lg">
               <img
-                src={card.photo || "/placeholder.svg"}
+                src={card.thumbnail || "/placeholder.svg"}
                 alt={card.name}
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
               />

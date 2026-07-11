@@ -38,6 +38,9 @@ export interface DownloadedCard {
   watchlistLocalIds: Array<number | string>
   modifiedDate: string | null
   photoPath: string | null
+  // Small face thumbnail, separate from photoPath (the full-quality source photo used to actually
+  // mirror the card onto other FRS servers). Display-only - never uploaded anywhere.
+  thumbnailPath: string | null
   // A change here (as much as name/watchlists) marks a known origin card as updated - see the
   // metadataHash computation below - so an edit made only to a card's comment on FRS still gets
   // detected and mirrored to the other servers, not just name/watchlist edits.
@@ -81,8 +84,8 @@ const getGlobalCardStmt = db.prepare(`SELECT * FROM global_cards WHERE global_ca
 const insertGlobalCardStmt = db.prepare(`
   INSERT INTO global_cards
     (global_card_uuid, origin_server_uuid, origin_card_id, name, comment, metadata_json, image_ref,
-     image_hash, metadata_hash, sync_version, origin_modified_at, status)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 'active')
+     thumbnail_ref, image_hash, metadata_hash, sync_version, origin_modified_at, status)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 'active')
 `)
 
 // Optimistic concurrency (RFC Phase 9): only applies the update if sync_version still matches
@@ -90,8 +93,9 @@ const insertGlobalCardStmt = db.prepare(`
 // the caller treats that as "nothing to do this pass" rather than double-bumping the version.
 const updateGlobalCardStmt = db.prepare(`
   UPDATE global_cards
-  SET name = ?, comment = ?, metadata_json = ?, image_ref = ?, image_hash = ?, metadata_hash = ?,
-      sync_version = sync_version + 1, origin_modified_at = ?, updated_at = CURRENT_TIMESTAMP
+  SET name = ?, comment = ?, metadata_json = ?, image_ref = ?, thumbnail_ref = ?, image_hash = ?,
+      metadata_hash = ?, sync_version = sync_version + 1, origin_modified_at = ?,
+      updated_at = CURRENT_TIMESTAMP
   WHERE global_card_uuid = ? AND sync_version = ?
 `)
 
@@ -151,6 +155,7 @@ function classifyImpl(server: ServerRow, card: DownloadedCard): ClassificationOu
         card.comment,
         JSON.stringify({ watchlists: canonicalNames }),
         card.photoPath,
+        card.thumbnailPath,
         imageHash,
         metadataHash,
         card.modifiedDate,
@@ -249,6 +254,7 @@ function classifyImpl(server: ServerRow, card: DownloadedCard): ClassificationOu
     card.comment,
     JSON.stringify({ watchlists: canonicalNames }),
     card.photoPath,
+    card.thumbnailPath,
     imageHash,
     metadataHash,
     card.modifiedDate

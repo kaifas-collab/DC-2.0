@@ -84,6 +84,16 @@ try {
   // Column already exists, ignore.
 }
 
+// Migration: a dedicated small thumbnail, separate from image_ref (which stays the full-quality
+// source photo used to actually mirror a card's face record onto other FRS servers - degrading
+// that would hurt face-recognition matching on replicas). thumbnail_ref is display-only, for the
+// DC dashboard's card grid/drawer, so a dense grid doesn't load full-resolution images.
+try {
+  db.exec(`ALTER TABLE global_cards ADD COLUMN thumbnail_ref TEXT`)
+} catch {
+  // Column already exists, ignore.
+}
+
 // card_placements - the recursion firewall + idempotency guard + work queue (populated by Module 4/5)
 db.exec(`
   CREATE TABLE IF NOT EXISTS card_placements (

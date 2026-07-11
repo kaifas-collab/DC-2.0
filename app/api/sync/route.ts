@@ -88,6 +88,14 @@ function pickSyncablePhoto(card: any): string | null {
   return null
 }
 
+// Display-only counterpart to pickSyncablePhoto: the DC dashboard's card grid/drawer should load
+// the small cropped thumbnail, not the full source photo pickSyncablePhoto prefers for FRS uploads
+// (a dense grid loading full-resolution images is wasteful bandwidth/render cost). Never used for
+// anything pushed to FRS - see thumbnail_ref's column comment in schema.ts.
+function pickSyncableThumbnail(card: any): string | null {
+  return typeof card.thumbnail === 'string' && card.thumbnail.startsWith('/uploads/') ? card.thumbnail : null
+}
+
 // Helper function to download and save image using curl (async, non-blocking)
 async function downloadImage(url: string, cardName: string, cardId: string): Promise<string | null> {
   try {
@@ -394,6 +402,7 @@ export async function POST(request: NextRequest) {
                   watchlistLocalIds: Array.isArray(rawCard.watch_lists) ? rawCard.watch_lists : [],
                   modifiedDate,
                   photoPath: pickSyncablePhoto(rawCard),
+                  thumbnailPath: pickSyncableThumbnail(rawCard),
                   comment: rawCard.comment || '',
                   stampedGlobalUuid: CONFIG.sync?.stampMetadata ? rawCard.meta?.dc_global_key || null : null,
                 })

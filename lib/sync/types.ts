@@ -45,6 +45,7 @@ export interface GlobalCardRow {
   comment: string | null
   metadata_json: string | null
   image_ref: string | null
+  thumbnail_ref: string | null
   image_hash: string | null
   metadata_hash: string | null
   sync_version: number

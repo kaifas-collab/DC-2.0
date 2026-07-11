@@ -535,7 +535,7 @@ export default function DashboardPage() {
                     {/* Thumbnail - the dominant element */}
                     <div className="relative aspect-square bg-muted overflow-hidden">
                       <Image
-                        src={card.photo || '/placeholder-user.jpg'}
+                        src={card.thumbnail || '/placeholder-user.jpg'}
                         alt={card.name}
                         fill
                         className="object-cover group-hover:scale-105 transition-transform duration-300"
