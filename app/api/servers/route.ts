@@ -3,6 +3,7 @@ import axios from 'axios'
 import { getServerConfig, saveServerConfig } from '@/config/serverConfig'
 import { checkServerHealth } from '@/lib/health'
 import { bootstrapRegistry } from '@/lib/sync/registry'
+import { validateAllServers } from '@/lib/sync/configValidator'
 import logger from '@/lib/logger'
 import type { ServerConfig } from '@/lib/types'
 
@@ -96,6 +97,22 @@ export async function POST(request: NextRequest) {
 
     // Assigns server_uuid and upserts it into the sync-engine servers table (idempotent).
     bootstrapRegistry()
+
+    // "Server added" is one of the documented triggers for the config-validation sweep (RFC Phase 5
+    // F6 - see configValidator.ts's module header; app/api/sync-engine/registry/route.ts does the
+    // same after its own bootstrap). This discovers the new server's actual local watchlist ids
+    // *before* the background sync below tries to push cards to it - otherwise resolveWatchlists()
+    // has no data yet for this server and every placement gets skipped as "config incomplete" until
+    // the next scheduled validation sweep (up to validationIntervalMs later), even if the server is
+    // actually configured correctly.
+    try {
+      await validateAllServers()
+    } catch (error) {
+      logger.warn('servers.add', `Config validation after adding "${name}" failed (continuing)`, {
+        serverName: name,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
 
     logger.info('servers.add', `Added server "${name}" (${baseURL})`, { serverName: name, baseURL, location })
 

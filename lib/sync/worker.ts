@@ -33,6 +33,22 @@ const MAX_ATTEMPTS = 8
 const LEASE_MS = 180_000
 const BACKOFF_CAP_MS = 5 * 60_000
 
+// Axios error messages are generic ("Request failed with status code 400") and hide the actual FRS
+// validation reason, which lives in the response body. Folding that in here is what makes a 400
+// diagnosable straight from the log file, without having to reproduce the request by hand.
+function describeError(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status
+    const data = error.response?.data
+    if (data !== undefined) {
+      const detail = typeof data === 'string' ? data : JSON.stringify(data)
+      return `${error.message} - FRS responded ${status}: ${detail.slice(0, 500)}`
+    }
+    return error.message
+  }
+  return error instanceof Error ? error.message : 'Unknown error'
+}
+
 function computeBackoffMs(retryCount: number): number {
   const base = Math.min(1000 * 2 ** Math.max(retryCount - 1, 0), BACKOFF_CAP_MS)
   const jitter = Math.random() * base * 0.2
@@ -358,7 +374,7 @@ async function processDelete(
     maybeFinalizeClusterDelete(globalCard.global_card_uuid)
     return 'deleted'
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown delete error'
+    const message = describeError(error)
     const nextRetryCount = placement.retry_count + 1
 
     if (nextRetryCount >= MAX_ATTEMPTS) {
@@ -520,7 +536,7 @@ async function processPlacement(placement: CardPlacementRow, workerId: string): 
     logAudit('upload_success', placement, workerId, null)
     return 'synced'
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown upload error'
+    const message = describeError(error)
     const nextRetryCount = placement.retry_count + 1
 
     if (nextRetryCount >= MAX_ATTEMPTS) {
